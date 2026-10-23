@@ -4,9 +4,11 @@ const form = $("#composer"), input = $("#input"), sendBtn = $("#send"), counter 
 
 let history = [];
 let busy = false;
+let controller = null;   // Stop button ke liye
 
 const SPARK = '<svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M12 2c.6 5.2 4.8 9.4 10 10-5.2.6-9.4 4.8-10 10-.6-5.2-4.8-9.4-10-10C7.2 11.4 11.4 7.2 12 2z"/></svg>';
-const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+const ICON_SEND = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>';
+const ICON_STOP = '<svg viewBox="0 0 24 24" width="18" height="18"><rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor"/></svg>';
 
 /* ---------- Greeting ---------- */
 function setGreeting() {
@@ -85,6 +87,19 @@ function addTyping() {
   return el;
 }
 
+function addCopy(el, text) {
+  const copy = document.createElement("button");
+  copy.className = "copy";
+  copy.type = "button";
+  copy.textContent = "Copy";
+  copy.addEventListener("click", async () => {
+    try { await navigator.clipboard.writeText(text); copy.textContent = "Copy ho gaya"; }
+    catch (e) { copy.textContent = "Copy nahi hua"; }
+    setTimeout(() => (copy.textContent = "Copy"), 1500);
+  });
+  el.querySelector(".tools").appendChild(copy);
+}
+
 function addError(message, originalText) {
   const el = addBot();
   el.classList.add("error");
@@ -103,73 +118,79 @@ function addError(message, originalText) {
   scrollEnd();
 }
 
-function reveal(el, text) {
-  return new Promise((resolve) => {
-    const target = el.querySelector(".text");
-    const finish = () => {
-      target.innerHTML = md(text);
-      const copy = document.createElement("button");
-      copy.className = "copy";
-      copy.type = "button";
-      copy.textContent = "Copy";
-      copy.addEventListener("click", async () => {
-        try { await navigator.clipboard.writeText(text); copy.textContent = "Copy ho gaya"; }
-        catch (e) { copy.textContent = "Copy nahi hua"; }
-        setTimeout(() => (copy.textContent = "Copy"), 1500);
-      });
-      el.querySelector(".tools").appendChild(copy);
-      scrollEnd();
-      resolve();
-    };
-    if (reduceMotion) return finish();
-    let n = 0;
-    const step = Math.max(2, Math.ceil(text.length / 140));
-    const timer = setInterval(() => {
-      n += step;
-      if (n >= text.length) { clearInterval(timer); finish(); return; }
-      target.innerHTML = md(text.slice(0, n));
-      scrollEnd();
-    }, 16);
-  });
+function setSendMode(streaming) {
+  sendBtn.innerHTML = streaming ? ICON_STOP : ICON_SEND;
+  sendBtn.setAttribute("aria-label", streaming ? "Jawab rokho" : "Message bhejo");
 }
 
-/* ---------- Sending ---------- */
+/* ---------- Sending (streaming) ---------- */
 async function send(raw) {
   const text = raw.trim();
   if (!text || busy) return;
   busy = true;
-  sendBtn.disabled = true;
+  setSendMode(true);
+  updateSend();
   welcome.hidden = true;
 
   addUser(text);
   history.push({ role: "user", content: text });
-  const typing = addTyping();
+  const bot = addTyping();
+  const target = bot.querySelector(".text");
+  controller = new AbortController();
+  let reply = "";
 
   try {
     // Backend ki limits: max 20 messages, har message max 2000 chars, pehla message user ka
     let msgs = history.slice(-20).map((m) => ({ role: m.role, content: m.content.slice(0, 2000) }));
     while (msgs.length && msgs[0].role !== "user") msgs.shift();
 
-    const res = await fetch("/api/chat", {
+    const res = await fetch("/api/chat-stream", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ messages: msgs }),
+      signal: controller.signal,
     });
-    let data = {};
-    try { data = await res.json(); } catch (e) {}
+
     if (!res.ok) {
+      let data = {};
+      try { data = await res.json(); } catch (e) {}
       throw new Error(typeof data.detail === "string" ? data.detail : "Server se jawab nahi aaya, thodi der baad try karo.");
     }
-    history.push({ role: "assistant", content: data.reply });
-    typing.querySelector(".text").innerHTML = "";
-    await reveal(typing, data.reply);
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      reply += decoder.decode(value, { stream: true });
+      target.innerHTML = md(reply);
+      scrollEnd();
+    }
+    reply += decoder.decode();
+    if (!reply.trim()) throw new Error("Khaali jawab aaya, dobara try karo.");
+    target.innerHTML = md(reply);
   } catch (err) {
-    typing.remove();
-    history.pop();   // fail hua message history se hatao
-    addError(err.message || "Internet ya server ki dikkat hai.", text);
+    if (reply.trim()) {
+      // Beech mein ruka (Stop ya network), jitna aaya wo rakh lo
+      target.innerHTML = md(reply);
+    } else {
+      bot.remove();
+      history.pop();   // fail hua message history se hatao
+      if (err.name !== "AbortError") {
+        addError(err.message || "Internet ya server ki dikkat hai.", text);
+      }
+    }
   }
 
+  if (reply.trim()) {
+    history.push({ role: "assistant", content: reply });
+    addCopy(bot, reply);
+  }
+  scrollEnd();
+
+  controller = null;
   busy = false;
+  setSendMode(false);
   updateSend();
   input.focus();
 }
@@ -183,17 +204,22 @@ function autosize() {
   counter.textContent = len + " / 2000";
   updateSend();
 }
-function updateSend() { sendBtn.disabled = busy || !input.value.trim(); }
+// Streaming ke dauran button Stop ban jata hai, isliye enabled rehna chahiye
+function updateSend() { sendBtn.disabled = !busy && !input.value.trim(); }
 
 input.addEventListener("input", autosize);
 input.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
     e.preventDefault();
-    form.requestSubmit();
+    if (!busy) form.requestSubmit();
   }
 });
 form.addEventListener("submit", (e) => {
   e.preventDefault();
+  if (busy) {                      // streaming chal rahi hai to ye Stop hai
+    if (controller) controller.abort();
+    return;
+  }
   const text = input.value;
   input.value = "";
   autosize();
