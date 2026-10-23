@@ -1,7 +1,8 @@
+
 fastapi
 uvicorn
 google-genai
 python-dotenv
 slowapi
 sqlalchemy
-psycopg2-binary; platform_system == "Linux"
+psycopg[binary]; platform_system == "Linux"

@@ -3,9 +3,12 @@ from datetime import datetime, timezone
 from sqlalchemy import create_engine, String, Text, ForeignKey, DateTime
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///chatbot.db")
-if DATABASE_URL.startswith("postgres://"):
-    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///chatbot.db").strip()
+# Neon/Render alag-alag prefix dete hain, sabko psycopg (v3) driver par laao
+for prefix in ("postgres://", "postgresql://", "postgresql+psycopg2://"):
+    if DATABASE_URL.startswith(prefix):
+        DATABASE_URL = "postgresql+psycopg://" + DATABASE_URL[len(prefix):]
+        break
 
 engine = create_engine(
     DATABASE_URL,
