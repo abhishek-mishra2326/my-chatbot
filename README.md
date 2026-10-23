@@ -14,6 +14,7 @@ A public, full-stack AI chatbot website. The frontend runs in the browser, a Pyt
 - Conversation memory, so follow-up questions work naturally
 - Error handling with automatic retry and a fallback model
 - Per-IP rate limiting to protect the free API quota from abuse
+- User accounts with secure password hashing, and per-user chat history stored in PostgreSQL
 
 ## Architecture
 
@@ -32,7 +33,7 @@ Responses are streamed from the backend to the browser chunk by chunk using Fast
 - **Frontend:** HTML, CSS, vanilla JavaScript
 - **Rate limiting:** slowapi
 - **Deployment:** Render
-
+- **Database:** SQLite (local), PostgreSQL on Neon (production)
 ## Project Structure
 
 ```
@@ -81,6 +82,8 @@ my-chatbot/
 | `GEMINI_API_KEY` | Yes | Your Gemini API key |
 | `GEMINI_MODEL` | No | Primary model to use |
 | `GEMINI_FALLBACK_MODEL` | No | Backup model used if the primary one fails |
+| `DATABASE_URL` | No | PostgreSQL connection string. If not set, a local SQLite file is used |
+| `COOKIE_SECURE` | No | Set to `1` in production (HTTPS) so the login cookie is sent securely |
 
 ## Security
 
@@ -94,12 +97,11 @@ my-chatbot/
 
 - The Gemini free tier has shared daily limits across the whole app, so heavy traffic may trigger a "limit reached" message
 - On Render's free plan the app sleeps after a period of inactivity, so the first load can take 30-60 seconds
-- Chat history is kept only in the browser session and is not stored in a database
 
 ## Roadmap
 
 - [x] Streaming responses
-- [ ] User login and persistent chat history
+- [x] User login and persistent chat history
 - [ ] Retrieval-Augmented Generation (RAG) over custom PDFs and notes
 - [ ] Tool use and function calling
 
