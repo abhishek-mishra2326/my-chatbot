@@ -1,66 +1,75 @@
 const $ = (s) => document.querySelector(s);
-const chat = $("#chat"), list = $("#messages"), welcome = $("#welcome");
+const app = $("#app"), chat = $("#chat"), list = $("#messages"), welcome = $("#welcome");
 const form = $("#composer"), input = $("#input"), sendBtn = $("#send"), counter = $("#count");
+const convListEl = $("#convList");
 
-let history = [];
+let convId = null;        // abhi khuli chat ki id (null = nayi chat)
+let conversations = [];
 let busy = false;
-let controller = null;   // Stop button ke liye
+let controller = null;
+let authMode = "login";
 
 const SPARK = '<svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M12 2c.6 5.2 4.8 9.4 10 10-5.2.6-9.4 4.8-10 10-.6-5.2-4.8-9.4-10-10C7.2 11.4 11.4 7.2 12 2z"/></svg>';
 const ICON_SEND = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>';
 const ICON_STOP = '<svg viewBox="0 0 24 24" width="18" height="18"><rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor"/></svg>';
 
-/* ---------- Greeting ---------- */
+/* ---------- API helper ---------- */
+function errMsg(data) {
+  const d = data && data.detail;
+  if (typeof d === "string") return d;
+  if (Array.isArray(d)) return "Input sahi nahi hai: email ka format dekho, password kam se kam 8 characters ka ho, message 2000 se chhota ho.";
+  return "Server se jawab nahi aaya, thodi der baad try karo.";
+}
+async function api(path, method = "GET", body) {
+  const res = await fetch(path, {
+    method,
+    headers: { "Content-Type": "application/json" },
+    credentials: "same-origin",
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  let data = null;
+  try { data = await res.json(); } catch (e) {}
+  if (!res.ok) { const err = new Error(errMsg(data)); err.status = res.status; throw err; }
+  return data;
+}
+
+/* ---------- Greeting, theme ---------- */
 function setGreeting() {
   const h = new Date().getHours();
-  const g = h < 5 ? "Raat ke jaagne wale, kya poochna hai?"
+  $("#greeting").textContent = h < 5 ? "Raat ke jaagne wale, kya poochna hai?"
     : h < 12 ? "Subah-subah kya seekhna hai?"
     : h < 17 ? "Dopahar mein kaunsa doubt hai?"
     : h < 21 ? "Shaam ko kya samajhna hai?"
     : "Raat ho gayi, kaunsa doubt baaki hai?";
-  $("#greeting").textContent = g;
 }
-setGreeting();
-
-/* ---------- Theme ---------- */
 $("#themeBtn").addEventListener("click", () => {
   const root = document.documentElement;
-  const dark = getComputedStyle(root).colorScheme.includes("dark");
-  const next = dark ? "light" : "dark";
+  const next = getComputedStyle(root).colorScheme.includes("dark") ? "light" : "dark";
   root.dataset.theme = next;
   try { localStorage.setItem("theme", next); } catch (e) {}
 });
 
-/* ---------- Safe markdown-lite (pehle escape, phir formatting) ---------- */
-function esc(s) {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-}
+/* ---------- Safe markdown-lite ---------- */
+function esc(s) { return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
 function md(text) {
   const blocks = [];
   let t = esc(text).replace(/```\w*\n?([\s\S]*?)```/g, (_, code) => {
     blocks.push(code.replace(/\n$/, ""));
     return "\u0000" + (blocks.length - 1) + "\u0000";
   });
-  t = t.replace(/`([^`\n]+)`/g, "<code>$1</code>")
-       .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
+  t = t.replace(/`([^`\n]+)`/g, "<code>$1</code>").replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
   let out = "", inList = false;
   for (const line of t.split("\n")) {
     const m = line.match(/^\s*(?:[-*]|\d+\.)\s+(.*)/);
-    if (m) {
-      if (!inList) { out += "<ul>"; inList = true; }
-      out += "<li>" + m[1] + "</li>";
-    } else {
-      if (inList) { out += "</ul>"; inList = false; }
-      out += line + "\n";
-    }
+    if (m) { if (!inList) { out += "<ul>"; inList = true; } out += "<li>" + m[1] + "</li>"; }
+    else { if (inList) { out += "</ul>"; inList = false; } out += line + "\n"; }
   }
   if (inList) out += "</ul>";
   return out.replace(/\u0000(\d+)\u0000/g, (_, i) => "<pre><code>" + blocks[i] + "</code></pre>").trim();
 }
 
-/* ---------- UI helpers ---------- */
+/* ---------- Message UI ---------- */
 function scrollEnd() { chat.scrollTop = chat.scrollHeight; }
-
 function addUser(text) {
   const el = document.createElement("div");
   el.className = "msg user";
@@ -71,7 +80,6 @@ function addUser(text) {
   list.appendChild(el);
   scrollEnd();
 }
-
 function addBot() {
   const el = document.createElement("div");
   el.className = "msg bot";
@@ -80,13 +88,11 @@ function addBot() {
   scrollEnd();
   return el;
 }
-
 function addTyping() {
   const el = addBot();
   el.querySelector(".text").innerHTML = '<span class="dots" aria-label="Saathi soch raha hai"><i></i><i></i><i></i></span>';
   return el;
 }
-
 function addCopy(el, text) {
   const copy = document.createElement("button");
   copy.className = "copy";
@@ -99,7 +105,6 @@ function addCopy(el, text) {
   });
   el.querySelector(".tools").appendChild(copy);
 }
-
 function addError(message, originalText) {
   const el = addBot();
   el.classList.add("error");
@@ -108,20 +113,132 @@ function addError(message, originalText) {
   retry.className = "retry";
   retry.type = "button";
   retry.textContent = "Message wapas box mein daalo";
-  retry.addEventListener("click", () => {
-    input.value = originalText;
-    autosize();
-    input.focus();
-    el.remove();
-  });
+  retry.addEventListener("click", () => { input.value = originalText; autosize(); input.focus(); el.remove(); });
   el.querySelector(".tools").appendChild(retry);
   scrollEnd();
 }
-
 function setSendMode(streaming) {
   sendBtn.innerHTML = streaming ? ICON_STOP : ICON_SEND;
   sendBtn.setAttribute("aria-label", streaming ? "Jawab rokho" : "Message bhejo");
 }
+
+/* ---------- Sidebar: chats ki list ---------- */
+function closeSidebar() { app.classList.remove("open"); }
+$("#menuBtn").addEventListener("click", () => app.classList.toggle("open"));
+$("#backdrop").addEventListener("click", closeSidebar);
+
+function renderConvs() {
+  convListEl.innerHTML = "";
+  if (!conversations.length) {
+    const p = document.createElement("p");
+    p.className = "conv-empty";
+    p.textContent = "Abhi koi chat nahi hai.";
+    convListEl.appendChild(p);
+    return;
+  }
+  for (const c of conversations) {
+    const row = document.createElement("div");
+    row.className = "conv" + (c.id === convId ? " active" : "");
+    const t = document.createElement("button");
+    t.className = "conv-title";
+    t.type = "button";
+    t.textContent = c.title;
+    t.addEventListener("click", () => openConversation(c.id));
+    const d = document.createElement("button");
+    d.className = "conv-del";
+    d.type = "button";
+    d.setAttribute("aria-label", "Chat delete karo");
+    d.textContent = "×";
+    d.addEventListener("click", () => deleteConversation(c.id));
+    row.append(t, d);
+    convListEl.appendChild(row);
+  }
+}
+async function loadConversations() {
+  try { conversations = await api("/api/conversations"); renderConvs(); }
+  catch (e) { if (e.status === 401) showAuth(); }
+}
+async function openConversation(id) {
+  if (busy) return;
+  try {
+    const data = await api("/api/conversations/" + id);
+    convId = id;
+    list.innerHTML = "";
+    welcome.hidden = true;
+    for (const m of data.messages) {
+      if (m.role === "user") addUser(m.content);
+      else { const b = addBot(); b.querySelector(".text").innerHTML = md(m.content); addCopy(b, m.content); }
+    }
+    renderConvs();
+    closeSidebar();
+    scrollEnd();
+  } catch (e) { if (e.status === 401) showAuth(); }
+}
+async function deleteConversation(id) {
+  if (busy || !confirm("Ye chat hamesha ke liye delete kar du?")) return;
+  try {
+    await api("/api/conversations/" + id, "DELETE");
+    if (id === convId) newChat();
+    await loadConversations();
+  } catch (e) { if (e.status === 401) showAuth(); }
+}
+function newChat() {
+  if (busy) return;
+  convId = null;
+  list.innerHTML = "";
+  setGreeting();
+  welcome.hidden = false;
+  renderConvs();
+  closeSidebar();
+  input.focus();
+}
+$("#newChat").addEventListener("click", newChat);
+
+/* ---------- Auth ---------- */
+function setAuthMode(mode) {
+  authMode = mode;
+  const login = mode === "login";
+  $("#authTitle").textContent = login ? "Wapas aao" : "Naya account banao";
+  $("#authSub").textContent = login ? "Login karke apni purani chats dekho." : "Email aur password se account banao, chats save hongi.";
+  $("#authSubmit").textContent = login ? "Login" : "Account banao";
+  $("#authToggle").textContent = login ? "Naya account banao" : "Pehle se account hai? Login karo";
+  $("#password").autocomplete = login ? "current-password" : "new-password";
+  $("#authError").hidden = true;
+}
+function showAuth() {
+  convId = null; conversations = []; list.innerHTML = ""; welcome.hidden = false;
+  renderConvs();
+  $("#password").value = "";
+  $("#auth").hidden = false;
+  $("#email").focus();
+}
+function showApp(email) {
+  $("#auth").hidden = true;
+  $("#userEmail").textContent = email;
+  setGreeting();
+  loadConversations();
+  input.focus();
+}
+$("#authToggle").addEventListener("click", () => setAuthMode(authMode === "login" ? "signup" : "login"));
+$("#authForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const btn = $("#authSubmit"), errEl = $("#authError");
+  btn.disabled = true;
+  errEl.hidden = true;
+  try {
+    const me = await api("/api/" + authMode, "POST", { email: $("#email").value.trim(), password: $("#password").value });
+    showApp(me.email);
+  } catch (err) {
+    errEl.textContent = err.message;
+    errEl.hidden = false;
+  }
+  btn.disabled = false;
+});
+$("#logoutBtn").addEventListener("click", async () => {
+  try { await api("/api/logout", "POST"); } catch (e) {}
+  closeSidebar();
+  showAuth();
+});
 
 /* ---------- Sending (streaming) ---------- */
 async function send(raw) {
@@ -133,29 +250,28 @@ async function send(raw) {
   welcome.hidden = true;
 
   addUser(text);
-  history.push({ role: "user", content: text });
   const bot = addTyping();
   const target = bot.querySelector(".text");
   controller = new AbortController();
   let reply = "";
 
   try {
-    // Backend ki limits: max 20 messages, har message max 2000 chars, pehla message user ka
-    let msgs = history.slice(-20).map((m) => ({ role: m.role, content: m.content.slice(0, 2000) }));
-    while (msgs.length && msgs[0].role !== "user") msgs.shift();
-
     const res = await fetch("/api/chat-stream", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ messages: msgs }),
+      credentials: "same-origin",
+      body: JSON.stringify({ conversation_id: convId, message: text.slice(0, 2000) }),
       signal: controller.signal,
     });
-
     if (!res.ok) {
-      let data = {};
+      let data = null;
       try { data = await res.json(); } catch (e) {}
-      throw new Error(typeof data.detail === "string" ? data.detail : "Server se jawab nahi aaya, thodi der baad try karo.");
+      const err = new Error(errMsg(data));
+      err.status = res.status;
+      throw err;
     }
+    const cid = res.headers.get("X-Conversation-Id");
+    if (cid) convId = Number(cid);
 
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
@@ -171,27 +287,21 @@ async function send(raw) {
     target.innerHTML = md(reply);
   } catch (err) {
     if (reply.trim()) {
-      // Beech mein ruka (Stop ya network), jitna aaya wo rakh lo
-      target.innerHTML = md(reply);
+      target.innerHTML = md(reply);      // Stop ya network toota: jitna aaya wo rakho
     } else {
       bot.remove();
-      history.pop();   // fail hua message history se hatao
-      if (err.name !== "AbortError") {
-        addError(err.message || "Internet ya server ki dikkat hai.", text);
-      }
+      if (err.status === 401) showAuth();
+      else if (err.name !== "AbortError") addError(err.message || "Internet ya server ki dikkat hai.", text);
     }
   }
 
-  if (reply.trim()) {
-    history.push({ role: "assistant", content: reply });
-    addCopy(bot, reply);
-  }
-  scrollEnd();
-
+  if (reply.trim()) addCopy(bot, reply);
   controller = null;
   busy = false;
   setSendMode(false);
   updateSend();
+  scrollEnd();
+  loadConversations();       // title aur order refresh
   input.focus();
 }
 
@@ -204,7 +314,6 @@ function autosize() {
   counter.textContent = len + " / 2000";
   updateSend();
 }
-// Streaming ke dauran button Stop ban jata hai, isliye enabled rehna chahiye
 function updateSend() { sendBtn.disabled = !busy && !input.value.trim(); }
 
 input.addEventListener("input", autosize);
@@ -216,28 +325,18 @@ input.addEventListener("keydown", (e) => {
 });
 form.addEventListener("submit", (e) => {
   e.preventDefault();
-  if (busy) {                      // streaming chal rahi hai to ye Stop hai
-    if (controller) controller.abort();
-    return;
-  }
+  if (busy) { if (controller) controller.abort(); return; }   // streaming ke dauran ye Stop hai
   const text = input.value;
   input.value = "";
   autosize();
   send(text);
 });
+document.querySelectorAll(".chip").forEach((c) => c.addEventListener("click", () => send(c.textContent)));
 
-document.querySelectorAll(".chip").forEach((c) =>
-  c.addEventListener("click", () => send(c.textContent))
-);
-
-$("#newChat").addEventListener("click", () => {
-  if (busy) return;
-  history = [];
-  list.innerHTML = "";
+/* ---------- Start ---------- */
+(async function init() {
   setGreeting();
-  welcome.hidden = false;
-  input.focus();
-});
-
-updateSend();
-input.focus();
+  updateSend();
+  try { const me = await api("/api/me"); showApp(me.email); }
+  catch (e) { showAuth(); }
+})();
