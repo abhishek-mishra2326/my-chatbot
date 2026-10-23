@@ -36,14 +36,17 @@ app.state.limiter = limiter
 
 @app.exception_handler(RateLimitExceeded)
 async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
-    return JSONResponse(status_code=429, content={"detail": "Bahut zyada requests, 1 minute ruk ke try karo."})
+    return JSONResponse(status_code=429, content={"detail": "Too many requests. Please wait a minute and try again."})
 
 # ---------- Settings ----------
 MODELS = [m for m in [
     os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite"),
     os.getenv("GEMINI_FALLBACK_MODEL"),
 ] if m]
-SYSTEM_PROMPT = "Tum ek helpful, friendly assistant ho. Jawab chhote aur clear rakho."
+SYSTEM_PROMPT = (
+    "You are Saathi, a helpful, friendly and professional AI assistant. "
+    "Keep answers clear and concise. Reply in the same language the user writes in."
+)
 COOKIE = "saathi_session"
 SESSION_DAYS = 14
 SECURE_COOKIE = os.getenv("COOKIE_SECURE") == "1"   # Render (https) par 1 rakhna
@@ -89,7 +92,7 @@ def current_user(request: Request, db: Session = Depends(get_db)) -> User:
             user = db.get(User, s.user_id)
             if user:
                 return user
-    raise HTTPException(status_code=401, detail="Pehle login karo.")
+    raise HTTPException(status_code=401, detail="Please log in first.")
 
 # ---------- Request schemas ----------
 EMAIL_RE = r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
@@ -108,7 +111,7 @@ class ChatRequest(BaseModel):
 def signup(request: Request, creds: Credentials, response: Response, db: Session = Depends(get_db)):
     email = creds.email.strip().lower()
     if db.scalar(select(User).where(User.email == email)):
-        raise HTTPException(status_code=409, detail="Ye email pehle se registered hai, login karo.")
+        raise HTTPException(status_code=409, detail="An account with this email already exists. Please log in.")
     user = User(email=email, password_hash=hash_password(creds.password))
     db.add(user)
     db.commit()
@@ -121,7 +124,7 @@ def login(request: Request, creds: Credentials, response: Response, db: Session 
     email = creds.email.strip().lower()
     user = db.scalar(select(User).where(User.email == email))
     if not user or not verify_password(creds.password, user.password_hash):
-        raise HTTPException(status_code=401, detail="Email ya password galat hai.")
+        raise HTTPException(status_code=401, detail="Incorrect email or password.")
     start_session(db, user.id, response)
     return {"email": user.email}
 
@@ -142,7 +145,7 @@ def me(user: User = Depends(current_user)):
 def own_conversation(db: Session, cid: int, user: User) -> Conversation:
     conv = db.get(Conversation, cid)
     if not conv or conv.user_id != user.id:      # dusre user ki chat kabhi nahi dikhni chahiye
-        raise HTTPException(status_code=404, detail="Chat nahi mili.")
+        raise HTTPException(status_code=404, detail="Conversation not found.")
     return conv
 
 @app.get("/api/conversations")
@@ -189,11 +192,11 @@ def text_stream(contents, config):
                 print("Error:", e)
                 break
     if last_code == 429:
-        raise HTTPException(status_code=429, detail="Free limit abhi khatam ho gayi hai. Thodi der baad ya kal try karo.")
-    raise HTTPException(status_code=503, detail="AI abhi busy hai, thodi der baad dobara try karo.")
+        raise HTTPException(status_code=429, detail="The AI usage limit has been reached. Please try again later.")
+    raise HTTPException(status_code=503, detail="The AI service is busy. Please try again in a moment.")
 
 def mock_stream(message: str):
-    text = f"**Test mode:** tumne likha: {message}\n\n- ye fake jawab hai\n- history database mein save ho rahi hai"
+    text = f"**Test mode:** you wrote: {message}\n\n- this is a placeholder reply\n- chat history is being saved to the database"
     def gen():
         for w in text.split(" "):
             yield w + " "
@@ -231,7 +234,7 @@ def chat_stream(request: Request, req: ChatRequest,
         first, it = text_stream(contents, config)
 
     if conv is None:
-        conv = Conversation(user_id=user.id, title=req.message.strip()[:50] or "Nayi chat")
+        conv = Conversation(user_id=user.id, title=req.message.strip()[:50] or "New chat")
         db.add(conv)
         db.commit()
     cid = conv.id
@@ -251,7 +254,7 @@ def chat_stream(request: Request, req: ChatRequest,
                     yield t
         except Exception as e:
             print("Stream error:", e)
-            yield "\n\n(Jawab beech mein ruk gaya, dobara try karo.)"
+            yield "\n\n(The response was interrupted. Please try again.)"
         finally:
             # Stop dabane par bhi jitna jawab aaya wo save ho jata hai
             text = "".join(parts).strip()

@@ -17,8 +17,8 @@ const ICON_STOP = '<svg viewBox="0 0 24 24" width="18" height="18"><rect x="6" y
 function errMsg(data) {
   const d = data && data.detail;
   if (typeof d === "string") return d;
-  if (Array.isArray(d)) return "Input sahi nahi hai: email ka format dekho, password kam se kam 8 characters ka ho, message 2000 se chhota ho.";
-  return "Server se jawab nahi aaya, thodi der baad try karo.";
+  if (Array.isArray(d)) return "Invalid input. Check the email format, use a password of at least 8 characters, and keep messages under 2000 characters.";
+  return "No response from the server. Please try again shortly.";
 }
 async function api(path, method = "GET", body) {
   const res = await fetch(path, {
@@ -36,11 +36,11 @@ async function api(path, method = "GET", body) {
 /* ---------- Greeting, theme ---------- */
 function setGreeting() {
   const h = new Date().getHours();
-  $("#greeting").textContent = h < 5 ? "Raat ke jaagne wale, kya poochna hai?"
-    : h < 12 ? "Subah-subah kya seekhna hai?"
-    : h < 17 ? "Dopahar mein kaunsa doubt hai?"
-    : h < 21 ? "Shaam ko kya samajhna hai?"
-    : "Raat ho gayi, kaunsa doubt baaki hai?";
+  $("#greeting").textContent = h < 5 ? "Working late? How can I help?"
+    : h < 12 ? "Good morning. What are we working on?"
+    : h < 17 ? "Good afternoon. How can I help?"
+    : h < 21 ? "Good evening. What can I help you with?"
+    : "Late night? How can I help?";
 }
 $("#themeBtn").addEventListener("click", () => {
   const root = document.documentElement;
@@ -90,7 +90,7 @@ function addBot() {
 }
 function addTyping() {
   const el = addBot();
-  el.querySelector(".text").innerHTML = '<span class="dots" aria-label="Saathi soch raha hai"><i></i><i></i><i></i></span>';
+  el.querySelector(".text").innerHTML = '<span class="dots" aria-label="Saathi is typing"><i></i><i></i><i></i></span>';
   return el;
 }
 function addCopy(el, text) {
@@ -99,8 +99,8 @@ function addCopy(el, text) {
   copy.type = "button";
   copy.textContent = "Copy";
   copy.addEventListener("click", async () => {
-    try { await navigator.clipboard.writeText(text); copy.textContent = "Copy ho gaya"; }
-    catch (e) { copy.textContent = "Copy nahi hua"; }
+    try { await navigator.clipboard.writeText(text); copy.textContent = "Copied"; }
+    catch (e) { copy.textContent = "Copy failed"; }
     setTimeout(() => (copy.textContent = "Copy"), 1500);
   });
   el.querySelector(".tools").appendChild(copy);
@@ -112,14 +112,14 @@ function addError(message, originalText) {
   const retry = document.createElement("button");
   retry.className = "retry";
   retry.type = "button";
-  retry.textContent = "Message wapas box mein daalo";
+  retry.textContent = "Restore message to input";
   retry.addEventListener("click", () => { input.value = originalText; autosize(); input.focus(); el.remove(); });
   el.querySelector(".tools").appendChild(retry);
   scrollEnd();
 }
 function setSendMode(streaming) {
   sendBtn.innerHTML = streaming ? ICON_STOP : ICON_SEND;
-  sendBtn.setAttribute("aria-label", streaming ? "Jawab rokho" : "Message bhejo");
+  sendBtn.setAttribute("aria-label", streaming ? "Stop generating" : "Send message");
 }
 
 /* ---------- Sidebar: chats ki list ---------- */
@@ -132,7 +132,7 @@ function renderConvs() {
   if (!conversations.length) {
     const p = document.createElement("p");
     p.className = "conv-empty";
-    p.textContent = "Abhi koi chat nahi hai.";
+    p.textContent = "No conversations yet.";
     convListEl.appendChild(p);
     return;
   }
@@ -147,7 +147,7 @@ function renderConvs() {
     const d = document.createElement("button");
     d.className = "conv-del";
     d.type = "button";
-    d.setAttribute("aria-label", "Chat delete karo");
+    d.setAttribute("aria-label", "Delete conversation");
     d.textContent = "×";
     d.addEventListener("click", () => deleteConversation(c.id));
     row.append(t, d);
@@ -175,7 +175,7 @@ async function openConversation(id) {
   } catch (e) { if (e.status === 401) showAuth(); }
 }
 async function deleteConversation(id) {
-  if (busy || !confirm("Ye chat hamesha ke liye delete kar du?")) return;
+  if (busy || !confirm("Delete this conversation permanently?")) return;
   try {
     await api("/api/conversations/" + id, "DELETE");
     if (id === convId) newChat();
@@ -198,10 +198,10 @@ $("#newChat").addEventListener("click", newChat);
 function setAuthMode(mode) {
   authMode = mode;
   const login = mode === "login";
-  $("#authTitle").textContent = login ? "Wapas aao" : "Naya account banao";
-  $("#authSub").textContent = login ? "Login karke apni purani chats dekho." : "Email aur password se account banao, chats save hongi.";
-  $("#authSubmit").textContent = login ? "Login" : "Account banao";
-  $("#authToggle").textContent = login ? "Naya account banao" : "Pehle se account hai? Login karo";
+  $("#authTitle").textContent = login ? "Welcome back" : "Create your account";
+  $("#authSub").textContent = login ? "Log in to access your chat history." : "Sign up to save your conversations.";
+  $("#authSubmit").textContent = login ? "Login" : "Create account";
+  $("#authToggle").textContent = login ? "Create an account" : "Already have an account? Log in";
   $("#password").autocomplete = login ? "current-password" : "new-password";
   $("#authError").hidden = true;
 }
@@ -283,7 +283,7 @@ async function send(raw) {
       scrollEnd();
     }
     reply += decoder.decode();
-    if (!reply.trim()) throw new Error("Khaali jawab aaya, dobara try karo.");
+    if (!reply.trim()) throw new Error("The response was empty. Please try again.");
     target.innerHTML = md(reply);
   } catch (err) {
     if (reply.trim()) {
@@ -291,7 +291,7 @@ async function send(raw) {
     } else {
       bot.remove();
       if (err.status === 401) showAuth();
-      else if (err.name !== "AbortError") addError(err.message || "Internet ya server ki dikkat hai.", text);
+      else if (err.name !== "AbortError") addError(err.message || "Network or server error. Please try again.", text);
     }
   }
 
