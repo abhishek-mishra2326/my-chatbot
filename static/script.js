@@ -1,10 +1,12 @@
 const $ = (s) => document.querySelector(s);
 const app = $("#app"), chat = $("#chat"), list = $("#messages"), welcome = $("#welcome");
 const form = $("#composer"), input = $("#input"), sendBtn = $("#send"), counter = $("#count");
-const convListEl = $("#convList");
+const convListEl = $("#convList"), docListEl = $("#docList"), docMsgEl = $("#docMsg");
+const fileInput = $("#fileInput"), uploadBtn = $("#uploadBtn"), useDocs = $("#useDocs");
 
-let convId = null;        // abhi khuli chat ki id (null = nayi chat)
+let convId = null;        // currently open conversation (null = new chat)
 let conversations = [];
+let docs = [];
 let busy = false;
 let controller = null;
 let authMode = "login";
@@ -105,6 +107,17 @@ function addCopy(el, text) {
   });
   el.querySelector(".tools").appendChild(copy);
 }
+function addSources(el, sources) {
+  const wrap = document.createElement("div");
+  wrap.className = "sources";
+  for (const s of sources) {
+    const chip = document.createElement("span");
+    chip.className = "source";
+    chip.textContent = "[" + s.n + "] " + s.file + " · part " + s.part;
+    wrap.appendChild(chip);
+  }
+  el.querySelector(".body").insertBefore(wrap, el.querySelector(".tools"));
+}
 function addError(message, originalText) {
   const el = addBot();
   el.classList.add("error");
@@ -122,7 +135,7 @@ function setSendMode(streaming) {
   sendBtn.setAttribute("aria-label", streaming ? "Stop generating" : "Send message");
 }
 
-/* ---------- Sidebar: chats ki list ---------- */
+/* ---------- Sidebar: conversations ---------- */
 function closeSidebar() { app.classList.remove("open"); }
 $("#menuBtn").addEventListener("click", () => app.classList.toggle("open"));
 $("#backdrop").addEventListener("click", closeSidebar);
@@ -194,6 +207,76 @@ function newChat() {
 }
 $("#newChat").addEventListener("click", newChat);
 
+/* ---------- Sidebar: documents (RAG) ---------- */
+function docMsg(text, isError) {
+  docMsgEl.textContent = text || "";
+  docMsgEl.hidden = !text;
+  docMsgEl.classList.toggle("error", !!isError);
+}
+function renderDocs() {
+  docListEl.innerHTML = "";
+  if (!docs.length) {
+    const p = document.createElement("p");
+    p.className = "doc-empty";
+    p.textContent = "No documents yet.";
+    docListEl.appendChild(p);
+  }
+  for (const d of docs) {
+    const row = document.createElement("div");
+    row.className = "doc";
+    const name = document.createElement("span");
+    name.className = "doc-name";
+    name.title = d.filename;
+    name.textContent = d.filename;
+    const meta = document.createElement("span");
+    meta.className = "doc-meta";
+    meta.textContent = d.chunks + (d.chunks === 1 ? " part" : " parts");
+    const del = document.createElement("button");
+    del.className = "conv-del";
+    del.type = "button";
+    del.setAttribute("aria-label", "Delete document");
+    del.textContent = "×";
+    del.addEventListener("click", () => deleteDoc(d.id, d.filename));
+    row.append(name, meta, del);
+    docListEl.appendChild(row);
+  }
+  useDocs.disabled = !docs.length;
+  if (!docs.length) useDocs.checked = false;
+  $("#useDocsText").textContent = docs.length ? "Use my documents" : "Use my documents (upload one first)";
+}
+async function loadDocs() {
+  try { docs = await api("/api/documents"); renderDocs(); }
+  catch (e) { if (e.status === 401) showAuth(); }
+}
+async function deleteDoc(id, name) {
+  if (!confirm('Delete "' + name + '"?')) return;
+  try { await api("/api/documents/" + id, "DELETE"); docMsg(""); await loadDocs(); }
+  catch (e) { if (e.status === 401) showAuth(); else docMsg(e.message, true); }
+}
+async function uploadDoc(file) {
+  if (!file) return;
+  uploadBtn.disabled = true;
+  docMsg("Uploading and indexing " + file.name + "...");
+  try {
+    const fd = new FormData();
+    fd.append("file", file);
+    const res = await fetch("/api/documents", { method: "POST", body: fd, credentials: "same-origin" });
+    let data = null;
+    try { data = await res.json(); } catch (e) {}
+    if (!res.ok) { const err = new Error(errMsg(data)); err.status = res.status; throw err; }
+    docMsg("Added " + data.filename + ".");
+    await loadDocs();
+    useDocs.checked = true;
+  } catch (err) {
+    if (err.status === 401) showAuth();
+    else docMsg(err.message, true);
+  }
+  fileInput.value = "";
+  uploadBtn.disabled = false;
+}
+uploadBtn.addEventListener("click", () => fileInput.click());
+fileInput.addEventListener("change", () => uploadDoc(fileInput.files[0]));
+
 /* ---------- Auth ---------- */
 function setAuthMode(mode) {
   authMode = mode;
@@ -206,8 +289,9 @@ function setAuthMode(mode) {
   $("#authError").hidden = true;
 }
 function showAuth() {
-  convId = null; conversations = []; list.innerHTML = ""; welcome.hidden = false;
-  renderConvs();
+  convId = null; conversations = []; docs = [];
+  list.innerHTML = ""; welcome.hidden = false;
+  renderConvs(); renderDocs(); docMsg("");
   $("#password").value = "";
   $("#auth").hidden = false;
   $("#email").focus();
@@ -217,6 +301,7 @@ function showApp(email) {
   $("#userEmail").textContent = email;
   setGreeting();
   loadConversations();
+  loadDocs();
   input.focus();
 }
 $("#authToggle").addEventListener("click", () => setAuthMode(authMode === "login" ? "signup" : "login"));
@@ -254,13 +339,18 @@ async function send(raw) {
   const target = bot.querySelector(".text");
   controller = new AbortController();
   let reply = "";
+  let sources = [];
 
   try {
     const res = await fetch("/api/chat-stream", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       credentials: "same-origin",
-      body: JSON.stringify({ conversation_id: convId, message: text.slice(0, 2000) }),
+      body: JSON.stringify({
+        conversation_id: convId,
+        message: text.slice(0, 2000),
+        use_docs: useDocs.checked && docs.length > 0,
+      }),
       signal: controller.signal,
     });
     if (!res.ok) {
@@ -272,6 +362,8 @@ async function send(raw) {
     }
     const cid = res.headers.get("X-Conversation-Id");
     if (cid) convId = Number(cid);
+    const rawSources = res.headers.get("X-Sources");
+    if (rawSources) { try { sources = JSON.parse(decodeURIComponent(rawSources)); } catch (e) {} }
 
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
@@ -287,7 +379,7 @@ async function send(raw) {
     target.innerHTML = md(reply);
   } catch (err) {
     if (reply.trim()) {
-      target.innerHTML = md(reply);      // Stop ya network toota: jitna aaya wo rakho
+      target.innerHTML = md(reply);      // stopped or network dropped: keep what arrived
     } else {
       bot.remove();
       if (err.status === 401) showAuth();
@@ -295,13 +387,16 @@ async function send(raw) {
     }
   }
 
-  if (reply.trim()) addCopy(bot, reply);
+  if (reply.trim()) {
+    if (sources.length) addSources(bot, sources);
+    addCopy(bot, reply);
+  }
   controller = null;
   busy = false;
   setSendMode(false);
   updateSend();
   scrollEnd();
-  loadConversations();       // title aur order refresh
+  loadConversations();       // refresh title and order
   input.focus();
 }
 
@@ -325,7 +420,7 @@ input.addEventListener("keydown", (e) => {
 });
 form.addEventListener("submit", (e) => {
   e.preventDefault();
-  if (busy) { if (controller) controller.abort(); return; }   // streaming ke dauran ye Stop hai
+  if (busy) { if (controller) controller.abort(); return; }   // while streaming this button is Stop
   const text = input.value;
   input.value = "";
   autosize();
@@ -337,6 +432,7 @@ document.querySelectorAll(".chip").forEach((c) => c.addEventListener("click", ()
 (async function init() {
   setGreeting();
   updateSend();
+  renderDocs();
   try { const me = await api("/api/me"); showApp(me.email); }
   catch (e) { showAuth(); }
 })();

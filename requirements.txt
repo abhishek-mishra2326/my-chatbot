@@ -1,8 +1,9 @@
-
 fastapi
 uvicorn
 google-genai
 python-dotenv
 slowapi
 sqlalchemy
+pypdf
+python-multipart
 psycopg[binary]; platform_system == "Linux"
