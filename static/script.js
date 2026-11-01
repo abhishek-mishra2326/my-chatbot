@@ -3,6 +3,7 @@ const app = $("#app"), chat = $("#chat"), list = $("#messages"), welcome = $("#w
 const form = $("#composer"), input = $("#input"), sendBtn = $("#send"), counter = $("#count");
 const convListEl = $("#convList"), docListEl = $("#docList"), docMsgEl = $("#docMsg");
 const fileInput = $("#fileInput"), uploadBtn = $("#uploadBtn"), useDocs = $("#useDocs");
+const attachBtn = $("#attachBtn"), composerMsgEl = $("#composerMsg");
 
 let convId = null;        // currently open conversation (null = new chat)
 let conversations = [];
@@ -207,11 +208,19 @@ function newChat() {
 }
 $("#newChat").addEventListener("click", newChat);
 
-/* ---------- Sidebar: documents (RAG) ---------- */
+/* ---------- Documents (RAG) ---------- */
+let noteTimer = null;
 function docMsg(text, isError) {
   docMsgEl.textContent = text || "";
   docMsgEl.hidden = !text;
   docMsgEl.classList.toggle("error", !!isError);
+  composerMsgEl.textContent = text || "";
+  composerMsgEl.hidden = !text;
+  composerMsgEl.classList.toggle("error", !!isError);
+  clearTimeout(noteTimer);
+  if (text && !text.startsWith("Uploading")) {      // success/error message kuch second baad hat jayega
+    noteTimer = setTimeout(() => docMsg(""), isError ? 8000 : 4000);
+  }
 }
 function renderDocs() {
   docListEl.innerHTML = "";
@@ -242,7 +251,9 @@ function renderDocs() {
   }
   useDocs.disabled = !docs.length;
   if (!docs.length) useDocs.checked = false;
-  $("#useDocsText").textContent = docs.length ? "Use my documents" : "Use my documents (upload one first)";
+  $("#useDocsText").textContent = docs.length
+    ? "Use my documents (" + docs.length + ")"
+    : "Use my documents (upload one first)";
 }
 async function loadDocs() {
   try { docs = await api("/api/documents"); renderDocs(); }
@@ -256,6 +267,7 @@ async function deleteDoc(id, name) {
 async function uploadDoc(file) {
   if (!file) return;
   uploadBtn.disabled = true;
+  attachBtn.disabled = true;
   docMsg("Uploading and indexing " + file.name + "...");
   try {
     const fd = new FormData();
@@ -273,8 +285,10 @@ async function uploadDoc(file) {
   }
   fileInput.value = "";
   uploadBtn.disabled = false;
+  attachBtn.disabled = false;
 }
 uploadBtn.addEventListener("click", () => fileInput.click());
+attachBtn.addEventListener("click", () => fileInput.click());
 fileInput.addEventListener("change", () => uploadDoc(fileInput.files[0]));
 
 /* ---------- Auth ---------- */
