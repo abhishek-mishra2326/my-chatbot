@@ -297,10 +297,11 @@ def retrieve(db: Session, user: User, question: str):
     return [by_id[cid] for cid in top if cid in by_id]
 
 def build_rag_prompt(question: str, hits) -> str:
-    parts = [f"[{n}] ({fname})\n{chunk.text}" for n, (chunk, fname) in enumerate(hits, 1)]
+    parts = [f"Excerpt {n} (from {fname}):\n{chunk.text}" for n, (chunk, fname) in enumerate(hits, 1)]
     return (
-        "Answer the question using only the numbered excerpts below. "
-        "Mention the excerpt numbers you used, like [1]. "
+        "Answer the question using only the excerpts below. "
+        "Do not mention excerpt numbers and do not add citation markers like [1] to your answer. "
+        "Write the answer in the same language as the question, even if the excerpts are in another language. "
         "If the excerpts do not contain the answer, say so clearly instead of guessing.\n\n"
         "Excerpts:\n" + "\n\n".join(parts) + f"\n\nQuestion: {question}"
     )

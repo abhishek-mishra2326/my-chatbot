@@ -53,6 +53,10 @@ $("#themeBtn").addEventListener("click", () => {
 });
 
 /* ---------- Safe markdown-lite ---------- */
+/* Remove leftover citation markers like [1] or [1, 2] from document answers */
+function stripCites(t) {
+  return t.replace(/\s\[\d+(?:\s*,\s*\d+)*\]/g, "").replace(/\s\[[\d,\s]*$/, "");
+}
 function esc(s) { return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
 function md(text) {
   const blocks = [];
@@ -114,7 +118,7 @@ function addSources(el, sources) {
   for (const s of sources) {
     const chip = document.createElement("span");
     chip.className = "source";
-    chip.textContent = "[" + s.n + "] " + s.file + " · part " + s.part;
+    chip.textContent = s.file + " · part " + s.part;
     wrap.appendChild(chip);
   }
   el.querySelector(".body").insertBefore(wrap, el.querySelector(".tools"));
@@ -181,7 +185,12 @@ async function openConversation(id) {
     welcome.hidden = true;
     for (const m of data.messages) {
       if (m.role === "user") addUser(m.content);
-      else { const b = addBot(); b.querySelector(".text").innerHTML = md(m.content); addCopy(b, m.content); }
+      else {
+        const clean = stripCites(m.content);     // purani chats ke brackets bhi saaf dikhenge
+        const b = addBot();
+        b.querySelector(".text").innerHTML = md(clean);
+        addCopy(b, clean);
+      }
     }
     renderConvs();
     closeSidebar();
@@ -354,6 +363,7 @@ async function send(raw) {
   controller = new AbortController();
   let reply = "";
   let sources = [];
+  const view = (t) => md(sources.length ? stripCites(t) : t);
 
   try {
     const res = await fetch("/api/chat-stream", {
@@ -385,15 +395,15 @@ async function send(raw) {
       const { done, value } = await reader.read();
       if (done) break;
       reply += decoder.decode(value, { stream: true });
-      target.innerHTML = md(reply);
+      target.innerHTML = view(reply);
       scrollEnd();
     }
     reply += decoder.decode();
     if (!reply.trim()) throw new Error("The response was empty. Please try again.");
-    target.innerHTML = md(reply);
+    target.innerHTML = view(reply);
   } catch (err) {
     if (reply.trim()) {
-      target.innerHTML = md(reply);      // stopped or network dropped: keep what arrived
+      target.innerHTML = view(reply);      // stopped or network dropped: keep what arrived
     } else {
       bot.remove();
       if (err.status === 401) showAuth();
@@ -403,7 +413,7 @@ async function send(raw) {
 
   if (reply.trim()) {
     if (sources.length) addSources(bot, sources);
-    addCopy(bot, reply);
+    addCopy(bot, sources.length ? stripCites(reply) : reply);
   }
   controller = null;
   busy = false;
